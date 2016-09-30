@@ -1,10 +1,33 @@
-#include <AltSoftSerial.h>
 #include <Wire.h>
 #include <ArduCAM.h>
 #include <SPI.h>
 #include "ov2640_regs.h"
 
-AltSoftSerial SWserial;
+//#define HOSTCONN
+//#if defined HOSTCONN
+//#include <AltSoftSerial.h>
+//AltSoftSerial SWserial;
+//#endif
+
+void handle_host ();
+void xlog (char * origin, char * text);
+void xlognum (char * origin, char * text, int number);
+void w_handle_line ();
+void rsend (char * msg);
+
+void state_0_1 ();
+void state_1_2 ();
+void state_2_3 ();
+void state_3_4 ();
+void state_4_5 ();
+void state_5_6 ();
+void state_6_7 ();
+void state_7_6 ();
+void state_8_7 ();
+
+void handle_command (char * command);
+void handle_command_ok (char * command);
+void handle_command_pic (char * command);
 
 const int CS = 6;
 ArduCAM cam(OV2640, CS);
@@ -15,27 +38,32 @@ uint32_t imglen;
 
 void setup() 
 {
+    Serial.begin(115200);  // ESP8266
+//#if defined HOSTCONN
+//    SWserial.begin(9600);  // Host connection/log
+//#endif
+    xlog ("H", "starting");
+    pinMode(2, OUTPUT);
+}
+
+void cam_init() {
     uint8_t vid,pid,temp;
     
-    Serial.begin(115200);  // ESP8266
-    SWserial.begin(9600);  // Host connection/log
-    log ("H", "starting");
-
     Wire.begin();
     pinMode(CS, OUTPUT);
     SPI.begin();
     cam.write_reg(ARDUCHIP_TEST1, 0x55);
     temp = cam.read_reg(ARDUCHIP_TEST1);
     if (temp != 0x55) { cam_ok = 0; }
-    if (temp == 0x55) { log ("H","spi ok"); }
+    if (temp == 0x55) { xlog ("H","spi ok"); }
     cam.wrSensorReg8_8(0xff, 0x01);
     cam.rdSensorReg8_8(OV2640_CHIPID_HIGH, &vid);
     cam.rdSensorReg8_8(OV2640_CHIPID_LOW, &pid);
     if ((vid != 0x26) || (pid != 0x42)) {
       cam_ok = 0;
-      log ("H", "cam not ok");
+      xlog ("H", "cam not ok");
     } else {
-      log ("H", "cam ok, OV2640");
+      xlog ("H", "cam ok, OV2640");
     }
     if (cam_ok) {
        cam.set_format(JPEG);
@@ -57,23 +85,7 @@ int state = 0;
 void loop() 
 {
     // Mirror host input to the ESP8266
-    if ( SWserial.available() ) {
-      int char_in = SWserial.read();
-      switch (char_in) {
-        case '\n': break; // ignore linefeed
-        case '\r':
-           SWserial.print ("\n\r");
-           h_handle_line();
-           break;
-        default:
-           SWserial.write (char_in);  // Mirror to host for human consumption
-           hlinebuf[hlineoff++] = char_in;
-           if (hlineoff > 254) {
-              log("H", "line too long, ignoring");
-              hlineoff = 0;
-           }
-      }
-    }
+    handle_host();
  
     // Collect input from the ESP8266 into lines and do things when appropriate.
     if ( Serial.available() ) {
@@ -94,14 +106,19 @@ void loop()
     // If a capture is in progress, handle that state machine.
     if (state == 7 && capture) { // ignore if we're still sending something else.
       if (capture == 1 && cam.get_bit(ARDUCHIP_TRIG, CAP_DONE_MASK)) {
-        log ("H","image ready");
         capture = 2;
         imglen = cam.read_fifo_length();
+        xlognum ("H","image ready", imglen);
         cam.CS_LOW();
         cam.set_fifo_burst();
       }
+      if (capture == 3) {
+        rsend ("done");
+        capture = 0;
+      }
+
       if (capture == 2) {
-        log ("H","packet");
+        xlognum ("H","packet",imglen);
         uint8_t temp, temp_last;
         uint32_t len = imglen;
         int found_end = 0;
@@ -109,47 +126,75 @@ void loop()
         Serial.print ("AT+CIPSEND=0,");
         Serial.print (len+7);
         Serial.print ("\r\n");
-        wait_for_data();
+        delay(10);
         Serial.print ("+img:");
 
-        while (len--) {
+        while (len) {
           imglen--;
           temp_last = temp;
           temp = SPI.transfer(0x00);
           Serial.write(temp);
           if ((temp == 0xD9) && (temp_last == 0xFF)) break;
           delayMicroseconds(12);
+          len--;
         }
         if (len) {
+          xlognum ("H","imgend", len);
           found_end = 1;
-          //while (len--) { Serial.write(0x00); }
+          len--;
+          while (len--) { Serial.write(0x00); }
         }
-        Serial.write("A");
-        Serial.write("A"); // note: this is bad.
-        Serial.write("A");
-        Serial.write("A");
-        Serial.write("A");
-        Serial.write("A");
-        Serial.write("A");
-        Serial.write("A");
-        Serial.write("A");
-        log("H","done sending");
         Serial.print ("\r\n");
+        xlog("H","done sending");
         state = 8;
         if (found_end || !imglen) {
-          log ("H","image done");
+          xlog ("H","image done");
           cam.CS_HIGH();
-          capture = 0;
+          capture = 3;
         }
       }
     }
 }
 
-void log (char * origin, char * text) {
-    SWserial.print (origin);
-    SWserial.print (":");
-    SWserial.println (text);
+void handle_host () {
+//#ifdef HOSTCONN
+//      if (SWserial.available() ) {
+//      int char_in = SWserial.read();
+//      switch (char_in) {
+//        case '\n': break; // ignore linefeed
+//        case '\r':
+//           SWserial.print ("\n\r");
+//           h_handle_line();
+//           break;
+//        default:
+//           SWserial.write (char_in);  // Mirror to host for human consumption
+//           hlinebuf[hlineoff++] = char_in;
+//           if (hlineoff > 254) {
+//              xlog("H", "line too long, ignoring");
+//              hlineoff = 0;
+ //          }
+ //       }
+ //     }
+//#endif
 }
+
+void xlog (char * origin, char * text) {
+//#ifdef HOSTCONN
+//    SWserial.print (origin);
+//    SWserial.print (":");
+//    SWserial.println (text);
+//#endif
+}
+void xlognum (char * origin, char * text, int number) {
+//#ifdef HOSTCONN
+//    SWserial.print (origin);
+//    SWserial.print (":");
+//    SWserial.print (text);
+//    SWserial.print (" ");
+//    SWserial.println (number);
+//#endif
+}
+
 void wsend (char * text) {
     Serial.print (text);
     Serial.print("\r\n");
@@ -157,7 +202,7 @@ void wsend (char * text) {
 
 void w_handle_line () {
     wlinebuf[wlineoff] = '\0';
-    log("W", wlinebuf);
+    xlog("W", wlinebuf);
 
          if (state==0 && !strcmp (wlinebuf,"ready"))     { state_0_1 (); }
     else if (state==1 && !strcmp (wlinebuf,"OK"))        { state_1_2 (); }
@@ -167,7 +212,7 @@ void w_handle_line () {
     else if (state==5 && !strcmp (wlinebuf,"OK"))        { state_5_6 (); }
     else if (state==6 && !strcmp (wlinebuf,"0,CONNECT")) { state_6_7 (); }
     else if (state==7 && !strcmp (wlinebuf,"0,CLOSED"))  { state_7_6 (); }
-    else if (state==8 && !strcmp (wlinebuf,"OK"))        { state_8_7 (); }
+    else if (state==8 && !strcmp (wlinebuf,"SEND OK"))   { state_8_7 (); }
     
     if (!strncmp (wlinebuf,"+IPD,",5)) {  // incoming command (or CR/LF)
         char * mark = wlinebuf + 6;
@@ -186,6 +231,8 @@ void w_handle_line () {
 }
 
 void state_0_1 () {
+    cam_init();
+    
     wsend("AT+CWMODE=3");
     state = 1;
 }
@@ -207,16 +254,17 @@ void state_4_5 () {
     state = 5;
 }
 void state_5_6 () {
-    log("H","listening");
+    xlog("H","listening");
+    digitalWrite(2,HIGH);
     state = 6;
 }
 void state_6_7 () {
-    log("H", "connect");
+    xlog("H", "connect");
     rsend ("Welcome to Coffeebot");
     state = 7;
 }
 void state_7_6 () {
-    log("H", "disconnect");
+    xlog("H", "disconnect");
     state = 6;
 }
 void state_8_7 () {
@@ -225,7 +273,7 @@ void state_8_7 () {
 
 void h_handle_line () {
     hlinebuf[hlineoff] = '\0';
-    log (">", hlinebuf);
+    xlog (">", hlinebuf);
     wsend(hlinebuf);
     hlineoff = 0;
 }
@@ -235,28 +283,28 @@ void wait_for_data () {
     while (millis() - time < 200) {
       if ( Serial.available() ) {
          int char_in = Serial.read();
-         SWserial.write(char_in);
+         //SWserial.write(char_in);
          if (char_in == '>') {
-            log ("H","waited");
+            xlog ("H","waited");
             return;
          }
       }
       delay (1);
     }
-    log ("H","timeout");
+    xlog ("H","timeout");
 }
 void rsend (char * msg) {
     Serial.print ("AT+CIPSEND=0,");
     Serial.print (strlen(msg)+4);
     Serial.print ("\r\n");
-    wait_for_data();
+    delay (10);
     Serial.print (msg);
     Serial.print ("\r\n");
     Serial.print ("? ");
     state = 8;
 }
 void handle_command (char * command) {
-    log ("!",command);
+    xlog ("!",command);
          if (!strcmp (command, "OK?")) { handle_command_ok(command); }
     else if (!strcmp (command, "pic")) { handle_command_pic(command); }
     else {
