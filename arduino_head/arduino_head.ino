@@ -4,16 +4,15 @@
 #include "ov2640_regs.h"
 
 //#define HOSTCONN
-//#if defined HOSTCONN
-//#include <AltSoftSerial.h>
+//#include <AltSoftSerial.h>  // Uncomment all three lines to enable software serial debugger (bug in IDE)
 //AltSoftSerial SWserial;
-//#endif
 
 void handle_host ();
 void xlog (char * origin, char * text);
 void xlognum (char * origin, char * text, int number);
 void w_handle_line ();
 void rsend (char * msg);
+void send_image_packet();
 
 void state_0_1 ();
 void state_1_2 ();
@@ -39,9 +38,9 @@ uint32_t imglen;
 void setup() 
 {
     Serial.begin(115200);  // ESP8266
-//#if defined HOSTCONN
-//    SWserial.begin(9600);  // Host connection/log
-//#endif
+#if defined HOSTCONN
+    SWserial.begin(9600);  // Host connection/log
+#endif
     xlog ("H", "starting");
     pinMode(2, OUTPUT);
 }
@@ -118,81 +117,136 @@ void loop()
       }
 
       if (capture == 2) {
-        xlognum ("H","packet",imglen);
-        uint8_t temp, temp_last;
-        uint32_t len = imglen;
-        int found_end = 0;
-        if (len > 1024) len = 1024; // Cap this at 1k at a time.
-        Serial.print ("AT+CIPSEND=0,");
-        Serial.print (len+7);
-        Serial.print ("\r\n");
-        delay(10);
-        Serial.print ("+img:");
-
-        while (len) {
-          imglen--;
-          temp_last = temp;
-          temp = SPI.transfer(0x00);
-          Serial.write(temp);
-          if ((temp == 0xD9) && (temp_last == 0xFF)) break;
-          delayMicroseconds(12);
-          len--;
-        }
-        if (len) {
-          xlognum ("H","imgend", len);
-          found_end = 1;
-          len--;
-          while (len--) { Serial.write(0x00); }
-        }
-        Serial.print ("\r\n");
-        xlog("H","done sending");
-        state = 8;
-        if (found_end || !imglen) {
-          xlog ("H","image done");
-          cam.CS_HIGH();
-          capture = 3;
-        }
+        send_image_packet();
       }
     }
 }
 
+// Base64 encoder adapted from https://github.com/adamvr/arduino-base64
+void base64_write(char * a3, int *i, int ch);
+void base64_write_end(char * a3, int *i);
+const char PROGMEM b64_alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+      	                            "abcdefghijklmnopqrstuvwxyz"
+                                    "0123456789+/";
+
+void send_image_packet() {
+    xlognum ("H","packet",imglen);
+    uint8_t temp, temp_last;
+ 
+    char a3[3];
+    int i = 0;
+    int found_end = 0;
+
+    uint32_t len = imglen;
+    if (len > 1024) len = 1024; // Cap this at 1k at a time.
+
+    Serial.print ("AT+CIPSEND=0,");
+    Serial.print (((len+2)/3)*4+9);  // Break our packet into chunks of 3 bytes, base64-encode to 4-byte chunks.
+    Serial.print ("\r\n");
+    delay(10);
+    Serial.print ("+img:\r\n");
+
+    while (len) {
+      imglen--;
+      temp_last = temp;
+      temp = SPI.transfer(0x00);
+      base64_write (a3, &i, temp);
+      if ((temp == 0xD9) && (temp_last == 0xFF)) break;
+      delayMicroseconds(12);
+      len--;
+    }
+
+    if (len) {
+      xlognum ("H","imgend", len);
+      found_end = 1;
+      len--;
+      while (len--) { base64_write(a3, &i, 0x00); }
+    }
+    base64_write_end(a3, &i);
+
+    Serial.print ("\r\n");
+    xlog("H","done sending");
+    state = 8;
+
+    if (found_end || !imglen) {
+      xlog ("H","image done");
+      cam.CS_HIGH();
+      capture = 3; // Set state machine to send "done" after current packet is finished sending.
+    }
+}
+
+inline void a3_to_a4(char * a4, char * a3) {
+  a4[0] = (a3[0] & 0xfc) >> 2;
+  a4[1] = ((a3[0] & 0x03) << 4) + ((a3[1] & 0xf0) >> 4);
+  a4[2] = ((a3[1] & 0x0f) << 2) + ((a3[2] & 0xc0) >> 6);
+  a4[3] = (a3[2] & 0x3f);
+}
+void base64_write (char *a3, int *i, int ch) { 
+  a3[*i] = ch; *i += 1;
+  if (*i == 3) {
+    char a4[4];
+    a3_to_a4(a4, a3);
+    Serial.write(pgm_read_byte(&b64_alphabet[a3[0]]));
+    Serial.write(pgm_read_byte(&b64_alphabet[a3[1]]));
+    Serial.write(pgm_read_byte(&b64_alphabet[a3[2]]));
+    Serial.write(pgm_read_byte(&b64_alphabet[a3[3]]));
+    *i = 0;
+  }
+}
+void base64_write_end (char *a3, int *i) {
+  if (!*i) return;
+  int j;
+  char a4[4];
+  for (j=*i; j < 3; j++) {
+    a3[j] = '\0';
+  }
+  for (j=0; j < *i + 1; j++) {
+    Serial.write(pgm_read_byte(&b64_alphabet[a3[j]]));
+  }
+  while (*i < 3) {
+    Serial.write('=');
+    *i += 1;
+  }
+  *i=0;
+}
+
 void handle_host () {
-//#ifdef HOSTCONN
-//      if (SWserial.available() ) {
-//      int char_in = SWserial.read();
-//      switch (char_in) {
-//        case '\n': break; // ignore linefeed
-//        case '\r':
-//           SWserial.print ("\n\r");
-//           h_handle_line();
-//           break;
-//        default:
-//           SWserial.write (char_in);  // Mirror to host for human consumption
-//           hlinebuf[hlineoff++] = char_in;
-//           if (hlineoff > 254) {
-//              xlog("H", "line too long, ignoring");
-//              hlineoff = 0;
- //          }
- //       }
- //     }
-//#endif
+#ifdef HOSTCONN
+      if (SWserial.available() ) {
+      int char_in = SWserial.read();
+      switch (char_in) {
+        case '\n': break; // ignore linefeed
+        case '\r':
+           SWserial.print ("\n\r");
+           h_handle_line();
+           break;
+        default:
+           SWserial.write (char_in);  // Mirror to host for human consumption
+           hlinebuf[hlineoff++] = char_in;
+           if (hlineoff > 254) {
+              xlog("H", "line too long, ignoring");
+              hlineoff = 0;
+           }
+        }
+      }
+#endif
 }
 
 void xlog (char * origin, char * text) {
-//#ifdef HOSTCONN
-//    SWserial.print (origin);
-//    SWserial.print (":");
-//    SWserial.println (text);
-//#endif
+#ifdef HOSTCONN
+    SWserial.print (origin);
+    SWserial.print (":");
+    SWserial.println (text);
+#endif
 }
 void xlognum (char * origin, char * text, int number) {
-//#ifdef HOSTCONN
-//    SWserial.print (origin);
-//    SWserial.print (":");
-//    SWserial.print (text);
-//    SWserial.print (" ");
-//    SWserial.println (number);
-//#endif
+#ifdef HOSTCONN
+    SWserial.print (origin);
+    SWserial.print (":");
+    SWserial.print (text);
+    SWserial.print (" ");
+    SWserial.println (number);
+#endif
 }
 
 void wsend (char * text) {
