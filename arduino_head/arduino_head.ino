@@ -186,10 +186,10 @@ void base64_write (char *a3, int *i, int ch) {
   if (*i == 3) {
     char a4[4];
     a3_to_a4(a4, a3);
-    Serial.write(pgm_read_byte(&b64_alphabet[a3[0]]));
-    Serial.write(pgm_read_byte(&b64_alphabet[a3[1]]));
-    Serial.write(pgm_read_byte(&b64_alphabet[a3[2]]));
-    Serial.write(pgm_read_byte(&b64_alphabet[a3[3]]));
+    Serial.write(pgm_read_byte(&b64_alphabet[a4[0]]));
+    Serial.write(pgm_read_byte(&b64_alphabet[a4[1]]));
+    Serial.write(pgm_read_byte(&b64_alphabet[a4[2]]));
+    Serial.write(pgm_read_byte(&b64_alphabet[a4[3]]));
     *i = 0;
   }
 }
@@ -201,7 +201,7 @@ void base64_write_end (char *a3, int *i) {
     a3[j] = '\0';
   }
   for (j=0; j < *i + 1; j++) {
-    Serial.write(pgm_read_byte(&b64_alphabet[a3[j]]));
+    Serial.write(pgm_read_byte(&b64_alphabet[a4[j]]));
   }
   while (*i < 3) {
     Serial.write('=');
