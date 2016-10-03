@@ -42,15 +42,20 @@ void setup()
     SWserial.begin(9600);  // Host connection/log
 #endif
     xlog ("H", "starting");
-    pinMode(2, OUTPUT);
+    pinMode(2, OUTPUT); // LED indicator
+    pinMode(7, OUTPUT); // SS for motor ganglion
+    pinMode(CS, OUTPUT);
+
+    digitalWrite (7, HIGH);
+    digitalWrite (CS, HIGH);
+    
+    Wire.begin();
+    SPI.begin();
 }
 
 void cam_init() {
     uint8_t vid,pid,temp;
     
-    Wire.begin();
-    pinMode(CS, OUTPUT);
-    SPI.begin();
     cam.write_reg(ARDUCHIP_TEST1, 0x55);
     temp = cam.read_reg(ARDUCHIP_TEST1);
     if (temp != 0x55) { cam_ok = 0; }
@@ -200,6 +205,7 @@ void base64_write_end (char *a3, int *i) {
   for (j=*i; j < 3; j++) {
     a3[j] = '\0';
   }
+  a3_to_a4(a4, a3);
   for (j=0; j < *i + 1; j++) {
     Serial.write(pgm_read_byte(&b64_alphabet[a4[j]]));
   }
@@ -361,8 +367,27 @@ void handle_command (char * command) {
     xlog ("!",command);
          if (!strcmp (command, "OK?")) { handle_command_ok(command); }
     else if (!strcmp (command, "pic")) { handle_command_pic(command); }
-    else {
+    else if (strlen (command) == 1) {
+       digitalWrite(7, LOW); // Select motor ganglion on SPI bus
+       SPI.transfer(command[0]);
+       digitalWrite(7, HIGH);
+    } else {
        rsend ("unknown");
+
+       // Test code to base64-encode every unknown string and send it back.
+       //Serial.print ("AT+CIPSEND=0,");
+       //Serial.print (((strlen(command)+2)/3)*4+2);
+       //Serial.print ("\r\n");
+       //delay(10);
+       //char a3[3];
+       //int i=0;
+       //int j;
+       //for (j=0; j < strlen(command); j++) {
+       //   base64_write (a3, &i, command[j]);
+       //}
+       //base64_write_end (a3, &i);
+       //Serial.print ("\r\n");
+       //state = 8;
     }
 }
 
