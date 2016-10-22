@@ -1,39 +1,23 @@
-#include <Wire.h>
-#include <SPI.h>
 #include <Adafruit_MotorShield.h>
-#include "utility/Adafruit_MS_PWMServoDriver.h"
-
-volatile boolean go;
-char command;
+//#include "utility/Adafruit_MS_PWMServoDriver.h"
 
 Adafruit_MotorShield AFMS = Adafruit_MotorShield(); 
 Adafruit_DCMotor *M1 = AFMS.getMotor(1);
 Adafruit_DCMotor *M2 = AFMS.getMotor(2);
 Adafruit_DCMotor *M3 = AFMS.getMotor(3);
 Adafruit_DCMotor *M4 = AFMS.getMotor(4);
-int inByte = 0;
 
 void setup() {
   Serial.begin(9600);           // set up Serial library at 9600 bps
   Serial.println("OK!");
   
-  SPCR |= bit (SPE); // slave mode;
-  pinMode(MISO, OUTPUT);
-  go = false;
-  SPI.attachInterrupt();
-
   AFMS.begin();  // create with the default frequency 1.6KHz
 }
 
-ISR (SPI_STC_vect) {
-  command = SPDR;
-  go = true;
-}
-  
-  
 void loop() {
-  if (go) {
-     go = false;
+  int command;
+  if (Serial.available()) {
+     command = Serial.read();
      switch (command) {
        case 'f':
          do_forward();
