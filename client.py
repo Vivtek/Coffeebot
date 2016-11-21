@@ -6,15 +6,16 @@
 # the image packets I was sending back from the ESP8266 version of the
 # head. It's obsolete, but still a starting point.
 
-from wxPython.wx import *
-from wxPython.lib.layoutf import Layoutf
+#from wx import *
+import wx
+from wx.lib.layoutf import Layoutf
 from telnetlib import Telnet # core module
 import base64
 import StringIO
 
 #---------------------------------------------------------------------------
 
-class UpdateTimer(wxTimer):
+class UpdateTimer(wx.Timer):
     def __init__(self, target, dur=1000):
         wxTimer.__init__(self)
         self.target = target
@@ -26,34 +27,34 @@ class UpdateTimer(wxTimer):
             self.target.OnUpdate()
 
 #---------------------------------------------------------------------------
-class TelnetFrame(wxFrame):
+class TelnetFrame(wx.Frame):
     def __init__(self, parent, ID):
-        wxFrame.__init__(self, parent, ID, "Telnet")
+        wx.Frame.__init__(self, parent, ID, "Telnet")
 
-        font = wxFont(8, wxMODERN, wxNORMAL, wxNORMAL, faceName="Lucida Console")
-        vertical_sizer = wxBoxSizer( wxVERTICAL )
+        font = wx.Font(8, wx.MODERN, wx.NORMAL, wx.NORMAL, faceName="Lucida Console")
+        vertical_sizer = wx.BoxSizer( wx.VERTICAL )
 
         # Command text box
-        commandId = wxNewId()
-        self.command = wxTextCtrl(self, commandId, "",
-                                  wxPyDefaultPosition, wxPyDefaultSize,
-                                  wxTE_PROCESS_ENTER)
+        commandId = wx.NewId()
+        self.command = wx.TextCtrl(self, commandId, "",
+                                  wx.DefaultPosition, wx.DefaultSize,
+                                  wx.TE_PROCESS_ENTER)
         #self.command.SetConstraints(Layoutf('t=t2#1;r=r2#1;b!32;l=l2#1', (self,)))
         self.command.SetFont(font)
-        EVT_TEXT_ENTER(self, commandId, self.OnEnter)
-        vertical_sizer.Add (self.command, 0, wxEXPAND, 0)
+        wx.EVT_TEXT_ENTER(self, commandId, self.OnEnter)
+        vertical_sizer.Add (self.command, 0, wx.EXPAND, 0)
 
         # Output text box
-        self.output = wxTextCtrl(self, -1, "",
-                                 wxPyDefaultPosition, wxSize(100,150),
-                                 wxTE_MULTILINE|wxTE_READONLY)
+        self.output = wx.TextCtrl(self, -1, "",
+                                 wx.DefaultPosition, wx.Size(100,150),
+                                 wx.TE_MULTILINE|wx.TE_READONLY)
         #self.output.SetConstraints(Layoutf('t_2#2;r=r2#1;b=b2#1;l=l2#1', (self,self.command)))
         self.output.SetFont(font)
-        vertical_sizer.Add (self.output, 1, wxEXPAND, 0)
+        vertical_sizer.Add (self.output, 1, wx.EXPAND, 0)
         
-        self.image = wxStaticBitmap(self, bitmap=wxEmptyBitmap(320, 240))
+        self.image = wx.StaticBitmap(self, bitmap=wx.EmptyBitmap(320, 240))
         self.image.SetConstraints(Layoutf('t_2#2;r=r2#1;b*;l*', (self, self.output)))
-        vertical_sizer.Add (self.image, 0, wxALIGN_CENTER)
+        vertical_sizer.Add (self.image, 0, wx.ALIGN_CENTER)
         
         self.current_image = None
         
@@ -61,7 +62,7 @@ class TelnetFrame(wxFrame):
         vertical_sizer.SetSizeHints(self)
         vertical_sizer.Fit(self)
 
-        EVT_CLOSE(self, self.OnCloseWindow)
+        wx.EVT_CLOSE(self, self.OnCloseWindow)
 
         self.tn = Telnet('192.168.4.1', 333) # connect to host
         self.timer = UpdateTimer(self, 100)
@@ -92,8 +93,8 @@ class TelnetFrame(wxFrame):
                 pass
             elif piece == "done":
                 self.output.AppendText("-->image done {0}\r\n? ".format(len(self.current_image)))
-                image = wxImageFromStream(StringIO.StringIO(self.current_image), wxBITMAP_TYPE_JPEG);
-                self.image.SetBitmap(wxBitmapFromImage(image))
+                image = wx.ImageFromStream(StringIO.StringIO(self.current_image), wx.BITMAP_TYPE_JPEG);
+                self.image.SetBitmap(wx.BitmapFromImage(image))
                 self.current_image = None
             elif piece == "":
                 pass
@@ -125,7 +126,7 @@ class TelnetFrame(wxFrame):
 
 if __name__ == '__main__':
     import sys
-    app = wxPySimpleApp()
+    app = wx.PySimpleApp()
     frame = TelnetFrame(None, -1)
     frame.Show(true)
     app.MainLoop()
