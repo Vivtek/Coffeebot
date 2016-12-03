@@ -20,12 +20,12 @@ POE::Session->create (
     }
 );
 
-# Create session on serial port for the visual cortex
+# Create session on serial port for the arm controller
 POE::Session->create(
   inline_states => {
     _start      => \&setup_arm,
-    incoming_wheels => \&incoming_arm,
-    wheels_error   => \&handle_arm_error,
+    incoming_arm => \&incoming_arm,
+    arm_error   => \&handle_arm_error,
   },
 );
 
@@ -35,6 +35,15 @@ POE::Session->create(
     _start      => \&setup_wheels,
     incoming_wheels => \&incoming_wheels,
     wheels_error   => \&handle_wheels_error,
+  },
+);
+
+# Create session on serial port for the visual cortex
+POE::Session->create(
+  inline_states => {
+    _start      => \&setup_eye,
+    incoming_eye => \&incoming_eye,
+    eye_error   => \&handle_eye_error,
   },
 );
 
@@ -48,6 +57,7 @@ exit 0;
 my $console = undef;
 my $wheels = undef;
 my $arm = undef;
+my $eye = undef;
 
 sub shut_down {
     $poe_kernel->stop();
@@ -98,7 +108,7 @@ sub handle_wheels_errors {
 }
 
 # ---------------------------------------------------------------------------------------
-# Visual cortex and arm handler
+# Arm handler
 # ---------------------------------------------------------------------------------------
 sub setup_arm {
   my ($kernel, $heap) = @_[KERNEL, HEAP];
@@ -134,6 +144,50 @@ sub incoming_arm {
 }
 
 sub handle_arm_errors {
+  my $heap = $_[HEAP];
+  $console->put("$_[ARG0] error $_[ARG1]: $_[ARG2]");
+  $console->put("bye!");
+  shut_down();
+}
+
+
+# ---------------------------------------------------------------------------------------
+# Visual cortex handler
+# ---------------------------------------------------------------------------------------
+sub setup_eye {
+  my ($kernel, $heap) = @_[KERNEL, HEAP];
+
+  # Open a serial port, and tie it to a file handle for POE.
+  my $handle = gensym();
+  my $port = tie(*$handle, "Device::SerialPort", "/dev/eye");
+  die "can't open port: $!" unless $port;
+  $port->datatype('raw');
+  $port->baudrate(115200);
+  $port->databits(8);
+  $port->parity("none");
+  $port->stopbits(1);
+  $port->handshake("rts");
+  $port->write_settings();
+
+  $heap->{eye} = $port;
+  $heap->{eye_wheel} = POE::Wheel::ReadWrite->new(
+    Handle => $handle,
+    Filter => POE::Filter::Line->new(
+      InputLiteral  => "\x0D",    # Received line endings.
+      OutputLiteral => "\x0D",        # Sent line endings.
+    ),
+    InputEvent => "incoming_eye",
+    ErrorEvent => "eye_error",
+  );
+  $eye = $heap->{eye_wheel};
+}
+
+sub incoming_eye {
+  my ($heap, $data) = @_[HEAP, ARG0];
+  say(420, $data);
+}
+
+sub handle_eye_errors {
   my $heap = $_[HEAP];
   $console->put("$_[ARG0] error $_[ARG1]: $_[ARG2]");
   $console->put("bye!");
