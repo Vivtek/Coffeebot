@@ -29,6 +29,108 @@ class UpdateTimer(wx.Timer):
         """Called every timer interval"""
         if self.target:
             self.target.OnUpdate()
+            
+#---------------------------------------------------------------------------
+# Taken from https://wiki.wxpython.org/DoubleBufferedDrawing
+#---------------------------------------------------------------------------
+USE_BUFFERED_DC = True
+class BufferedWindow(wx.Window):
+
+     """
+
+     A Buffered window class.
+
+     To use it, subclass it and define a Draw(DC) method that takes a DC
+     to draw to. In that method, put the code needed to draw the picture
+     you want. The window will automatically be double buffered, and the
+     screen will be automatically updated when a Paint event is received.
+
+     When the drawing needs to change, you app needs to call the
+     UpdateDrawing() method. Since the drawing is stored in a bitmap, you
+     can also save the drawing to file by calling the
+     SaveToFile(self, file_name, file_type) method.
+
+     """
+     def __init__(self, *args, **kwargs):
+         # make sure the NO_FULL_REPAINT_ON_RESIZE style flag is set.
+         kwargs['style'] = kwargs.setdefault('style', wx.NO_FULL_REPAINT_ON_RESIZE) | wx.NO_FULL_REPAINT_ON_RESIZE
+         wx.Window.__init__(self, *args, **kwargs)
+ 
+         self.Bind (wx.EVT_PAINT, self.OnPaint)
+         self.Bind (wx.EVT_SIZE, self.OnSize)
+ 
+         # OnSize called to make sure the buffer is initialized.
+         # This might result in OnSize getting called twice on some
+         # platforms at initialization, but little harm done.
+         self.OnSize(None)
+         self.paint_count = 0
+ 
+     def Draw(self, dc):
+         ## just here as a place holder.
+         ## This method should be over-ridden when subclassed
+         pass
+ 
+     def OnPaint(self, event):
+         # All that is needed here is to draw the buffer to screen
+         if USE_BUFFERED_DC:
+             dc = wx.BufferedPaintDC(self, self._Buffer)
+         else:
+             dc = wx.PaintDC(self)
+             dc.DrawBitmap(self._Buffer, 0, 0)
+ 
+     def OnSize(self,event):
+         # The Buffer init is done here, to make sure the buffer is always
+         # the same size as the Window
+         #Size  = self.GetClientSizeTuple()
+         Size  = self.ClientSize
+ 
+         # Make new offscreen bitmap: this bitmap will always have the
+         # current drawing in it, so it can be used to save the image to
+         # a file, or whatever.
+         self._Buffer = wx.Bitmap(*Size)
+         self.UpdateDrawing()
+ 
+     def SaveToFile(self, FileName, FileType=wx.BITMAP_TYPE_PNG):
+         ## This will save the contents of the buffer
+         ## to the specified file. See the wxWindows docs for 
+         ## wx.Bitmap::SaveFile for the details
+         self._Buffer.SaveFile(FileName, FileType)
+ 
+     def UpdateDrawing(self):
+         """
+         This would get called if the drawing needed to change, for whatever reason.
+ 
+         The idea here is that the drawing is based on some data generated
+         elsewhere in the system. If that data changes, the drawing needs to
+         be updated.
+ 
+         This code re-draws the buffer, then calls Update, which forces a paint event.
+         """
+         dc = wx.MemoryDC()
+         dc.SelectObject(self._Buffer)
+         self.Draw(dc)
+         del dc # need to get rid of the MemoryDC before Update() is called.
+         self.Refresh()
+         self.Update()
+         
+class BitmapWindow(BufferedWindow):
+     def __init__(self, *args, **kwargs):
+         ## Any data the Draw() function needs must be initialized before
+         ## calling BufferedWindow.__init__, as it will call the Draw
+         ## function.
+         self.bitmap = wx.Bitmap(kwargs['size'])
+         BufferedWindow.__init__(self, *args, **kwargs)
+         
+     def SetBitmap(self, bitmap):
+         self.bitmap = bitmap
+         self.UpdateDrawing()
+ 
+     def Draw(self, dc):
+         dc.SetBackground( wx.Brush("White") )
+         dc.Clear() # make sure you clear the bitmap!
+
+         dc.DrawBitmap(self.bitmap, 0, 0)
+ 
 
 #---------------------------------------------------------------------------
 class TelnetFrame(wx.Frame):
@@ -43,22 +145,19 @@ class TelnetFrame(wx.Frame):
         self.command = wx.TextCtrl(self, commandId, "",
                                   wx.DefaultPosition, wx.DefaultSize,
                                   wx.TE_PROCESS_ENTER)
-        #self.command.SetConstraints(Layoutf('t=t2#1;r=r2#1;b!32;l=l2#1', (self,)))
         self.command.SetFont(font)
         self.Bind (wx.EVT_TEXT_ENTER, self.OnEnter)
         vertical_sizer.Add (self.command, 0, wx.EXPAND, 0)
 
-        # Output text box
         self.output = wx.TextCtrl(self, -1, "",
                                  wx.DefaultPosition, wx.Size(100,150),
                                  wx.TE_MULTILINE|wx.TE_READONLY)
-        #self.output.SetConstraints(Layoutf('t_2#2;r=r2#1;b=b2#1;l=l2#1', (self,self.command)))
         self.output.SetFont(font)
         vertical_sizer.Add (self.output, 1, wx.EXPAND, 0)
         
-        self.image = wx.StaticBitmap(self)
-        self.image.SetBitmap(wx.Bitmap(320, 240))
-        #self.image.SetConstraints(Layoutf('t_2#2;r=r2#1;b*;l*', (self, self.output)))
+        self.image = BitmapWindow(self, size=wx.Size(320, 240))
+        self.bitmap = wx.Bitmap(320, 240)
+        self.refresh_bitmap = False
         vertical_sizer.Add (self.image, 0, wx.ALIGN_CENTER)
         
         self.current_image = None
@@ -73,7 +172,10 @@ class TelnetFrame(wx.Frame):
         self.timer = UpdateTimer(self, 100)
 
     def OnUpdate(self):
-        """Output what's in the telnet buffer"""
+        """Output what's in the telnet buffer and update the bitmap, if any"""
+        if self.refresh_bitmap:
+           self.image.SetBitmap(self.bitmap)
+           self.refresh_bitmap = False
         try:
             newtext = self.tn.read_very_eager()
             if newtext:
@@ -107,20 +209,15 @@ class TelnetFrame(wx.Frame):
            # OK, we have some data on the OOB channel.
            if state == 1:
               image += data
-              print "state 1"
               if image.endswith("+++done\r\n"):
-                 print "done"
                  state = 2
               
            if state == 0:
               if (data.startswith('+')):
                  image = data[1:]
-                 print "starting image"
                  if image.endswith("+++done\r\n"):
-                    print "done in first"
                     state = 2
                  else:
-                    print "more to come"
                     state = 1
               elif data.startswith('='):
                  # Value coming in
@@ -133,17 +230,14 @@ class TelnetFrame(wx.Frame):
                  # so that I can turn it upside down.
                  try:
                     im = Image.open(StringIO.StringIO(image[:-9])).transpose(Image.ROTATE_180)
-                    print im.size
-                    bitmap = wx.Bitmap.FromBuffer (im.size[0], im.size[1], im.tobytes());
-                    print "made bitmap"
-                    self.image.SetBitmap (bitmap)
+                    self.bitmap = wx.Bitmap.FromBuffer (im.size[0], im.size[1], im.tobytes());
+                    self.refresh_bitmap = True
                  except:
                     pass
                  print "!"
                  image = ''
                  state = 0
               else:
-                 print "oops"
                  state = 1
             
     def OnEnter(self, e):
