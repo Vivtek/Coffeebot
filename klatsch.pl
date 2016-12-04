@@ -2,10 +2,12 @@
 
 use strict;
 use warnings;
+use POSIX 'strftime';
 my $peer = $ENV{'REMOTE_HOST'};
 
 use POE;
 use POE::Wheel::ReadWrite;
+use POE::Wheel::SocketFactory;
 use Symbol qw(gensym);
 use Device::SerialPort;
 
@@ -17,6 +19,7 @@ POE::Session->create (
         _start        => \&console_start,
         console_input => \&console_handler,
         _stop         => \&console_stop,
+        check_oob     => \&console_check_oob,
     }
 );
 
@@ -47,6 +50,17 @@ POE::Session->create(
   },
 );
 
+# Create socket factory for OOB channel
+POE::Session->create(
+  inline_states => {
+    _start => \&setup_sockets,
+    on_client_accept => \&oob_client_accept,
+    on_server_error  => \&oob_server_error,
+    on_client_input  => \&oob_client_input,
+    on_client_error  => \&oob_client_error,
+  },
+);
+
 
 $poe_kernel->run();
 exit 0;
@@ -58,11 +72,36 @@ my $console = undef;
 my $wheels = undef;
 my $arm = undef;
 my $eye = undef;
+my $oob_server = undef;
+my $oob = undef;
 
 sub shut_down {
     $poe_kernel->stop();
 }
 
+# ---------------------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------------------
+my $log = undef;
+
+sub to_log {
+   return unless $log;
+   return unless fileno($log);
+   my $time = POSIX::strftime('%I:%M:%S ', localtime);
+   print $log $time, shift, "\n";
+}
+
+# ---------------------------------------------------------------------------------------
+# Hardware state variables
+# ---------------------------------------------------------------------------------------
+my %state_variables;
+
+sub set_state {
+   my ($name, $val) = @_;
+   return unless defined $val;
+   $state_variables{$name} = $val;
+   to_log ("$name -> $val");
+}
 
 # ---------------------------------------------------------------------------------------
 # Motor ganglion handler
@@ -86,7 +125,7 @@ sub setup_wheels {
   $heap->{wheels_wheel} = POE::Wheel::ReadWrite->new(
     Handle => $handle,
     Filter => POE::Filter::Line->new(
-      InputLiteral  => "\x0D",    # Received line endings.
+      InputLiteral  => "\x0D\x0A",    # Received line endings.
       OutputLiteral => "\x0D",        # Sent line endings.
     ),
     InputEvent => "incoming_wheels",
@@ -129,7 +168,7 @@ sub setup_arm {
   $heap->{arm_wheel} = POE::Wheel::ReadWrite->new(
     Handle => $handle,
     Filter => POE::Filter::Line->new(
-      InputLiteral  => "\x0D",    # Received line endings.
+      InputLiteral  => "\x0D\x0A",    # Received line endings.
       OutputLiteral => "\x0D",        # Sent line endings.
     ),
     InputEvent => "incoming_arm",
@@ -140,7 +179,14 @@ sub setup_arm {
 
 sub incoming_arm {
   my ($heap, $data) = @_[HEAP, ARG0];
-  say(410, $data);
+  if ($data =~ /^=/) {
+     $data =~ s/^.*=//;
+     my ($name, $val) = split / /, $data;
+     set_state($name, $val);
+  }
+  else {
+     say(410, $data);
+  }
 }
 
 sub handle_arm_errors {
@@ -173,7 +219,7 @@ sub setup_eye {
   $heap->{eye_wheel} = POE::Wheel::ReadWrite->new(
     Handle => $handle,
     Filter => POE::Filter::Line->new(
-      InputLiteral  => "\x0D",    # Received line endings.
+      InputLiteral  => "\x0D\x0A",    # Received line endings.
       OutputLiteral => "\x0D",        # Sent line endings.
     ),
     InputEvent => "incoming_eye",
@@ -182,9 +228,32 @@ sub setup_eye {
   $eye = $heap->{eye_wheel};
 }
 
+my $eye_state = 0;
+my $pic = '';
+
 sub incoming_eye {
   my ($heap, $data) = @_[HEAP, ARG0];
-  say(420, $data);
+  if ($eye_state == 0 and $data =~ /^img /) {
+     $eye_state = 1;
+  } elsif ($eye_state == 1) {
+     if ($data =~ /done$/m) {
+        $data =~ s/done$//m;
+        $pic .= $data;
+        $pic =~ s/^\00//;
+        $eye_state = 0;
+        my $date = POSIX::strftime('%Y-%m-%d-%I%M%S', localtime);
+        open (my $fh, ">", "/home/pi/log/$date.jpg");
+        binmode $fh;
+        print $fh $pic;
+        $pic = '';
+        to_log ("Image $date.jpg");
+     } else {
+        $pic .= $data;
+        $pic .= "\x0D\x0A";
+     }
+  } else {
+     say(420, $data);
+  }
 }
 
 sub handle_eye_errors {
@@ -192,6 +261,41 @@ sub handle_eye_errors {
   $console->put("$_[ARG0] error $_[ARG1]: $_[ARG2]");
   $console->put("bye!");
   shut_down();
+}
+
+# ---------------------------------------------------------------------------------------
+# OOB data handling
+# Largely taken from http://search.cpan.org/dist/POE/lib/POE/Wheel/SocketFactory.pm
+# ---------------------------------------------------------------------------------------
+sub setup_sockets {
+  $_[HEAP]{oob_server} = POE::Wheel::SocketFactory->new(
+     SuccessEvent => 'on_client_accept',
+     FailureEvent => 'on_server_error',
+  );
+  $oob_server = $_[HEAP]{oob_server};
+}
+sub oob_client_accept {
+  my $client_socket = $_[ARG0];
+  my $io_wheel = POE::Wheel::ReadWrite->new(
+    Handle => $client_socket,
+    InputEvent => "on_client_input",
+    ErrorEvent => "on_client_error",
+  );
+  $_[HEAP]{client}->{$io_wheel->ID() } = $io_wheel;
+  $oob = $io_wheel;
+}
+sub oob_server_error {
+    my ($kernel, $heap) = @_[KERNEL, HEAP];
+    $kernel->yield('_stop');
+}
+sub oob_client_input {
+    # Right now I have no use for client input on the OOB channel, which is just for sending
+    # hardware state and images.
+}
+sub oob_client_error {
+     # Handle client error, including disconnect.
+     my $wheel_id = $_[ARG3];
+     delete $_[HEAP]{client}{$wheel_id};
 }
 
 
@@ -210,7 +314,7 @@ sub say {
 }
 
 sub console_start {
-    my ($heap) = $_[HEAP];
+    my ($heap, $kernel) = $_[HEAP, KERNEL];
     $heap->{console} = POE::Wheel::ReadWrite->new(
         InputHandle  => \*STDIN,
         OutputHandle => \*STDOUT,
@@ -219,7 +323,18 @@ sub console_start {
     );
     $console = $heap->{console};
     say (100, "Welcome to Coffeebot - service is my only joy");
-    say (101, "Running as " . getpwuid( $< ));
+    my $date = POSIX::strftime('%Y-%m-%d-%I%M%S', localtime);
+    say (101, "Logging at time $date");
+    open($log, '>', "/home/pi/log/$date.txt") or say (500, "Couldn't open log: $!");
+    $kernel->yield('check_oob');
+}
+sub console_check_oob {
+    my ($port, $addr) = unpack_sockaddr_in($oob_server->getsockname);
+    if ($port) {
+       say (105, $port, "Listening for OOB connection");
+    } else {
+       $kernel->delay(check_oob => 1);
+    }
 }
 
 sub console_stop {
@@ -243,6 +358,8 @@ sub console_handler {
         	$arm->put($command);
         } elsif ($command eq 'q' || $command eq 'w' || $command eq 'e' || $command eq 'r') {
         	$arm->put($command);
+        } elsif ($command eq 'o') {
+            $eye->put($command);
         } elsif ($command eq 'something') {
             # command_something($heap, @pieces);
         } elsif ($command) {
