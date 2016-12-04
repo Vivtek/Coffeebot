@@ -91,6 +91,7 @@ void loop() {
           if ((temp==0xD9) && (temp_last==0xFF)) break;
           delayMicroseconds(12);
        }
+       Serial.println ("done");
 
        cam.CS_HIGH();
        capture = 0;
