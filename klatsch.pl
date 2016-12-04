@@ -12,7 +12,13 @@ use POE::Wheel::SocketFactory;
 use Symbol qw(gensym);
 use Device::SerialPort;
 
-# Open free port for binary data channel
+my $existing = `ps -ef | grep klatsch | grep -v grep`;
+if ($existing) {
+   my ($pi, $proc, $junk) = split / +/, $existing;
+   print "Killing hung process $proc\r\n";
+   system ("kill $proc");
+   sleep (0.5);
+}
 
 # Create session for console (talking to the client)
 POE::Session->create (
@@ -76,6 +82,7 @@ my $arm = undef;
 my $eye = undef;
 my $oob_server = undef;
 my $oob = undef;
+my $oob_connected = undef;
 
 my $eye_state = 0;
 my $pic = '';
@@ -146,10 +153,10 @@ sub incoming_wheels {
   say(400, $data);
 }
 
-sub handle_wheels_errors {
+sub handle_wheels_error {
   my $heap = $_[HEAP];
   $console->put("$_[ARG0] error $_[ARG1]: $_[ARG2]");
-  $console->put("bye!");
+  $console->put("motor error - crashing");
   shut_down();
 }
 
@@ -196,10 +203,10 @@ sub incoming_arm {
   }
 }
 
-sub handle_arm_errors {
+sub handle_arm_error {
   my $heap = $_[HEAP];
   $console->put("$_[ARG0] error $_[ARG1]: $_[ARG2]");
-  $console->put("bye!");
+  $console->put("arm error - crashing");
   shut_down();
 }
 
@@ -246,25 +253,30 @@ sub incoming_eye {
         $pic .= $data;
         $pic =~ s/^\00//;
         $eye_state = 0;
-        my $date = POSIX::strftime('%Y-%m-%d-%I%M%S', localtime);
-        open (my $fh, ">", "/home/pi/log/$date.jpg");
-        binmode $fh;
-        print $fh $pic;
-        $pic = '';
-        to_log ("Image $date.jpg");
+        if ($oob_connected) {
+           $oob->put('+' . $pic . '+++done');
+           $pic = '';
+        } else {
+           my $date = POSIX::strftime('%Y-%m-%d-%I%M%S', localtime);
+           open (my $fh, ">", "/home/pi/log/$date.jpg");
+           binmode $fh;
+           print $fh $pic;
+           $pic = '';
+           to_log ("Image $date.jpg");
+        }
      } else {
         $pic .= $data;
         $pic .= "\x0D\x0A";
      }
   } else {
-     say(420, $data);
+     say(420, $data) unless $data eq 'picture coming';
   }
 }
 
-sub handle_eye_errors {
+sub handle_eye_error {
   my $heap = $_[HEAP];
   $console->put("$_[ARG0] error $_[ARG1]: $_[ARG2]");
-  $console->put("bye!");
+  $console->put("eye error - crashing");
   shut_down();
 }
 
@@ -288,6 +300,7 @@ sub oob_client_accept {
   );
   $_[HEAP]{client}->{$io_wheel->ID() } = $io_wheel;
   $oob = $io_wheel;
+  $oob_connected = 1;
 }
 sub oob_server_error {
     my ($kernel, $heap) = @_[KERNEL, HEAP];
