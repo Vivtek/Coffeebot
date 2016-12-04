@@ -11,13 +11,15 @@ use POE::Wheel::ReadWrite;
 use POE::Wheel::SocketFactory;
 use Symbol qw(gensym);
 use Device::SerialPort;
-
 my $existing = `ps -ef | grep klatsch | grep -v grep`;
 if ($existing) {
    my ($pi, $proc, $junk) = split / +/, $existing;
-   print "Killing hung process $proc\r\n";
-   system ("kill $proc");
-   sleep (0.5);
+   if ($proc != $$) {
+      print "my process: $$\n";
+      print "Killing hung process $proc\r\n";
+      system ("kill $proc");
+      sleep (0.5);
+   }
 }
 
 # Create session for console (talking to the client)
