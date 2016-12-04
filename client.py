@@ -17,7 +17,7 @@ import StringIO
 
 class UpdateTimer(wx.Timer):
     def __init__(self, target, dur=1000):
-        wxTimer.__init__(self)
+        wx.Timer.__init__(self)
         self.target = target
         self.Start(dur)
 
@@ -41,7 +41,7 @@ class TelnetFrame(wx.Frame):
                                   wx.TE_PROCESS_ENTER)
         #self.command.SetConstraints(Layoutf('t=t2#1;r=r2#1;b!32;l=l2#1', (self,)))
         self.command.SetFont(font)
-        wx.EVT_TEXT_ENTER(self, commandId, self.OnEnter)
+        self.Bind (wx.EVT_TEXT_ENTER, self.OnEnter)
         vertical_sizer.Add (self.command, 0, wx.EXPAND, 0)
 
         # Output text box
@@ -52,7 +52,8 @@ class TelnetFrame(wx.Frame):
         self.output.SetFont(font)
         vertical_sizer.Add (self.output, 1, wx.EXPAND, 0)
         
-        self.image = wx.StaticBitmap(self, bitmap=wx.EmptyBitmap(320, 240))
+        self.image = wx.StaticBitmap(self)
+        self.image.SetBitmap(wx.Bitmap(320, 240))
         self.image.SetConstraints(Layoutf('t_2#2;r=r2#1;b*;l*', (self, self.output)))
         vertical_sizer.Add (self.image, 0, wx.ALIGN_CENTER)
         
@@ -62,9 +63,9 @@ class TelnetFrame(wx.Frame):
         vertical_sizer.SetSizeHints(self)
         vertical_sizer.Fit(self)
 
-        wx.EVT_CLOSE(self, self.OnCloseWindow)
+        self.Bind(wx.EVT_CLOSE, self.OnCloseWindow)
 
-        self.tn = Telnet('192.168.4.1', 333) # connect to host
+        self.tn = Telnet('192.168.0.20', 333) # connect to host
         self.timer = UpdateTimer(self, 100)
 
     def OnUpdate(self):
@@ -126,7 +127,7 @@ class TelnetFrame(wx.Frame):
 
 if __name__ == '__main__':
     import sys
-    app = wx.PySimpleApp()
+    app = wx.App()
     frame = TelnetFrame(None, -1)
-    frame.Show(true)
+    frame.Show(True)
     app.MainLoop()
