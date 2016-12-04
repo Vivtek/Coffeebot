@@ -3,6 +3,7 @@
 use strict;
 use warnings;
 use POSIX 'strftime';
+use Socket qw(unpack_sockaddr_in);
 my $peer = $ENV{'REMOTE_HOST'};
 
 use POE;
@@ -61,9 +62,10 @@ POE::Session->create(
   },
 );
 
-
 $poe_kernel->run();
 exit 0;
+
+
 
 # ---------------------------------------------------------------------------------------
 # Things we can talk to
@@ -74,6 +76,11 @@ my $arm = undef;
 my $eye = undef;
 my $oob_server = undef;
 my $oob = undef;
+
+my $eye_state = 0;
+my $pic = '';
+
+
 
 sub shut_down {
     $poe_kernel->stop();
@@ -228,11 +235,9 @@ sub setup_eye {
   $eye = $heap->{eye_wheel};
 }
 
-my $eye_state = 0;
-my $pic = '';
-
 sub incoming_eye {
   my ($heap, $data) = @_[HEAP, ARG0];
+  $eye_state = 0 unless defined $eye_state;
   if ($eye_state == 0 and $data =~ /^img /) {
      $eye_state = 1;
   } elsif ($eye_state == 1) {
@@ -314,7 +319,7 @@ sub say {
 }
 
 sub console_start {
-    my ($heap, $kernel) = $_[HEAP, KERNEL];
+    my ($heap, $kernel) = @_[HEAP, KERNEL];
     $heap->{console} = POE::Wheel::ReadWrite->new(
         InputHandle  => \*STDIN,
         OutputHandle => \*STDOUT,
@@ -329,6 +334,12 @@ sub console_start {
     $kernel->yield('check_oob');
 }
 sub console_check_oob {
+    my $kernel = $_[KERNEL];
+    say (104, "Checking OOB ready");
+    if (not defined $oob_server) {
+       $kernel->delay(check_oob => 1);
+       return;
+    }
     my ($port, $addr) = unpack_sockaddr_in($oob_server->getsockname);
     if ($port) {
        say (105, $port, "Listening for OOB connection");
@@ -379,3 +390,5 @@ sub command_quit {
     say (999, "Only joy");
     shut_down();
 }
+
+
