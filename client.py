@@ -8,10 +8,14 @@
 
 #from wx import *
 import wx
-from wx.lib.layoutf import Layoutf
+#from wx.lib.layoutf import Layoutf
 from telnetlib import Telnet # core module
 import base64
 import StringIO
+import socket
+import threading
+from PIL import Image
+
 
 #---------------------------------------------------------------------------
 
@@ -54,7 +58,7 @@ class TelnetFrame(wx.Frame):
         
         self.image = wx.StaticBitmap(self)
         self.image.SetBitmap(wx.Bitmap(320, 240))
-        self.image.SetConstraints(Layoutf('t_2#2;r=r2#1;b*;l*', (self, self.output)))
+        #self.image.SetConstraints(Layoutf('t_2#2;r=r2#1;b*;l*', (self, self.output)))
         vertical_sizer.Add (self.image, 0, wx.ALIGN_CENTER)
         
         self.current_image = None
@@ -80,36 +84,68 @@ class TelnetFrame(wx.Frame):
                     lines = newtext.split('\n') # This keeps it from printing out extra blank lines.
                     for line in lines:
                         self.output.AppendText(line)
+                        if line.startswith('105 '):
+                            port = ''.join(i for i in line[5:] if i.isdigit())
+                            self.oob_port = int(port)
+                            self.output.AppendText("--> port {}\n".format(port))
+                            self.thread = threading.Thread(target=self.oob_thread)
+                            self.thread.start()
         except EOFError:
             self.tn.close()
             self.timer.Stop()
             self.output.AppendText("Disconnected by remote host")
             
-    def image_packet(self, text):
-        """We have received a packet for an image. Do the right thing."""
-        pieces = text.split("\n")
-        for piece in pieces:
-            piece = piece.strip()
-            if piece == "+img:":
-                pass
-            elif piece == "done":
-                self.output.AppendText("-->image done {0}\r\n? ".format(len(self.current_image)))
-                image = wx.ImageFromStream(StringIO.StringIO(self.current_image), wx.BITMAP_TYPE_JPEG);
-                self.image.SetBitmap(wx.BitmapFromImage(image))
-                self.current_image = None
-            elif piece == "":
-                pass
-            elif piece == "?":
-                pass
-            else:
-                piece += "="
-                chunk = base64.b64decode(piece);
-                self.output.AppendText("---> image packet {0}\n".format(len(chunk)))
-                if self.current_image is None:
-                    self.current_image = chunk[1:] # Turns out ArduCAM sends a leading zero (or their example code, anyway).
-                else:
-                    self.current_image += chunk
-        
+    def oob_thread(self):
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.socket.connect(('192.168.0.20', self.oob_port))
+        state = 0
+        image = ''
+        while True:
+           data = self.socket.recv(1024)
+           if not data: break
+           
+           # OK, we have some data on the OOB channel.
+           if state == 1:
+              image += data
+              print "state 1"
+              if image.endswith("+++done\r\n"):
+                 print "done"
+                 state = 2
+              
+           if state == 0:
+              if (data.startswith('+')):
+                 image = data[1:]
+                 print "starting image"
+                 if image.endswith("+++done\r\n"):
+                    print "done in first"
+                    state = 2
+                 else:
+                    print "more to come"
+                    state = 1
+              elif data.startswith('='):
+                 # Value coming in
+                 pass
+                 
+           if state == 2:
+              print "image done"
+              if image.endswith("+++done\r\n"):
+                 # I'm loading into a PIL image first (ref: https://wiki.wxpython.org/WorkingWithImages)
+                 # so that I can turn it upside down.
+                 try:
+                    im = Image.open(StringIO.StringIO(image[:-9])).transpose(Image.ROTATE_180)
+                    print im.size
+                    bitmap = wx.Bitmap.FromBuffer (im.size[0], im.size[1], im.tobytes());
+                    print "made bitmap"
+                    self.image.SetBitmap (bitmap)
+                 except:
+                    pass
+                 print "!"
+                 image = ''
+                 state = 0
+              else:
+                 print "oops"
+                 state = 1
+            
     def OnEnter(self, e):
         """The user has entered a command.  Send it!"""
         input = e.GetString()
