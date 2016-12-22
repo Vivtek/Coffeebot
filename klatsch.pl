@@ -29,6 +29,7 @@ POE::Session->create (
         console_input => \&console_handler,
         _stop         => \&console_stop,
         check_oob     => \&console_check_oob,
+        next_snapshot => \&next_snapshot,
     }
 );
 
@@ -88,6 +89,8 @@ my $oob_connected = undef;
 
 my $eye_state = 0;
 my $pic = '';
+
+my $video_frequency = 0;
 
 
 
@@ -282,6 +285,12 @@ sub handle_eye_error {
   shut_down();
 }
 
+sub next_snapshot {
+  my ($heap, $kernel) = @_[HEAP, KERNEL];
+  $eye->put('o');
+  $kernel->delay(next_snapshot => $video_frequency) if $video_frequency;
+}
+
 # ---------------------------------------------------------------------------------------
 # OOB data handling
 # Largely taken from http://search.cpan.org/dist/POE/lib/POE/Wheel/SocketFactory.pm
@@ -378,14 +387,20 @@ sub console_handler {
         } elsif ($command eq 'x') {
             $wheels->put('x');
             $arm->put('x');
-        } elsif ($command eq 'f' || $command eq 'b') {
+        } elsif ($command eq 'f' || $command eq 'b' || $command eq 'p' || $command eq 'l') {
         	$wheels->put($command);
+        } elsif ($command eq 'k') {
+            $wheels->put('r'); 
         } elsif ($command eq '1' || $command eq '2' || $command eq '3' || $command eq '4') {
         	$arm->put($command);
         } elsif ($command eq 'q' || $command eq 'w' || $command eq 'e' || $command eq 'r') {
         	$arm->put($command);
         } elsif ($command eq 'o') {
             $eye->put($command);
+        } elsif ($command eq 'vid') {
+            $video_frequency = $pieces[0] || 0.5;
+            say (110, "vid frequency $video_frequency");
+            $kernel->delay(next_snapshot => $video_frequency) if $video_frequency;
         } elsif ($command eq 'something') {
             # command_something($heap, @pieces);
         } elsif ($command) {
