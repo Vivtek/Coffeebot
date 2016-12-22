@@ -15,7 +15,58 @@ import StringIO
 import socket
 import threading
 from PIL import Image
+import sys
 
+import evdev
+
+# --------------------------------------------------------------------------------
+# Find controller, if connected
+# --------------------------------------------------------------------------------
+devices = [evdev.InputDevice(fn) for fn in evdev.list_devices()]
+ps3 = None
+for device in devices:
+   if "PLAYSTATION(R)3" in device.name:
+      ps3 = device
+
+if ps3:
+   print "found PS3 controller"
+   #print ps3.capabilities(verbose=True)
+else:
+   print "Working sans PS3 controller (commands only)"
+   
+# ---------------------------------------------------------------------------------
+# Find Larry's IP given his probable IPs
+# ---------------------------------------------------------------------------------
+def ping(host):
+    """
+    Returns True if host responds to a ping request
+    Taken from: http://stackoverflow.com/questions/2953462/pinging-servers-in-python
+    (just in case I need this to be portable)
+    """
+    import subprocess, platform
+
+    # Ping parameters as function of OS
+    ping_str = "-n 1" if  platform.system().lower()=="windows" else "-c 1 -W 1 -q"
+    args = "ping " + " " + ping_str + " " + host
+    need_sh = False if  platform.system().lower()=="windows" else True
+
+    # Ping, discarding output for quiet operation.
+    return subprocess.call(args, shell=need_sh, stdout=subprocess.PIPE) == 0
+
+# test call
+possible_ips = ["192.168.0.20", "192.168.1.180"]
+larry_ip = None
+for ip in possible_ips:
+   if ping(ip):
+      larry_ip = ip
+      break
+
+if larry_ip is None:
+   print "Is Larry on?"
+   sys.exit(1)
+
+print "Larry found at {}".format(larry_ip)
+   
 
 #---------------------------------------------------------------------------
 
@@ -130,6 +181,39 @@ class BitmapWindow(BufferedWindow):
          dc.Clear() # make sure you clear the bitmap!
 
          dc.DrawBitmap(self.bitmap, 0, 0)
+         
+# -------------------------------------------------------------------------
+# The controller model keeps track of the state of our motion parameters.
+# We keep it synched between the client and Larry.
+# -------------------------------------------------------------------------
+class ControllerModel():
+   def __init__(self):
+      self.vforward = 0;
+      self.vbackward = 0;
+      self.vfspeed = 0;
+      self.vbspeed = 0;
+      
+   def forward(self, evalue):
+      if evalue == 1:
+         if self.vbackward:
+            self.vbackward = 0
+            self.vforward = 0
+            print "stop"
+         else:
+            self.vforward = 1
+            print "go forward"
+      else:
+         if self.vforward:
+            self.vforward = 0
+            self.vspeed = 0
+            print "stop"
+
+   def fspeed(self, evalue):
+      if self.forward:
+         speed = 1 + evalue / 10
+         if speed != self.vfspeed:
+            self.vfspeed = speed
+            print "speed = {}".format (speed)
  
 
 #---------------------------------------------------------------------------
@@ -146,11 +230,11 @@ class TelnetFrame(wx.Frame):
                                   wx.DefaultPosition, wx.DefaultSize,
                                   wx.TE_PROCESS_ENTER)
         self.command.SetFont(font)
-        self.Bind (wx.EVT_TEXT_ENTER, self.OnEnter)
+        self.command.Bind (wx.EVT_TEXT_ENTER, self.OnEnter)
         vertical_sizer.Add (self.command, 0, wx.EXPAND, 0)
 
         self.output = wx.TextCtrl(self, -1, "",
-                                 wx.DefaultPosition, wx.Size(100,150),
+                                 wx.DefaultPosition, wx.Size(800,300),
                                  wx.TE_MULTILINE|wx.TE_READONLY)
         self.output.SetFont(font)
         vertical_sizer.Add (self.output, 1, wx.EXPAND, 0)
@@ -158,6 +242,7 @@ class TelnetFrame(wx.Frame):
         self.image = BitmapWindow(self, size=wx.Size(320, 240))
         self.bitmap = wx.Bitmap(320, 240)
         self.refresh_bitmap = False
+        self.image_counter = 0
         vertical_sizer.Add (self.image, 0, wx.ALIGN_CENTER)
         
         self.current_image = None
@@ -168,13 +253,20 @@ class TelnetFrame(wx.Frame):
 
         self.Bind(wx.EVT_CLOSE, self.OnCloseWindow)
 
-        self.tn = Telnet('192.168.0.20', 333) # connect to host
+        self.tn = Telnet(larry_ip, 333) # connect to host
         self.timer = UpdateTimer(self, 100)
+        
+        if ps3:
+           self.controller_thread = threading.Thread(target=self.controller_thread_handler)
+           self.controller_thread.start()
+
 
     def OnUpdate(self):
         """Output what's in the telnet buffer and update the bitmap, if any"""
         if self.refresh_bitmap:
            self.image.SetBitmap(self.bitmap)
+           self.image.SaveToFile ("{}.jpg".format(self.image_counter))
+           self.image_counter += 1
            self.refresh_bitmap = False
         try:
             newtext = self.tn.read_very_eager()
@@ -199,7 +291,7 @@ class TelnetFrame(wx.Frame):
             
     def oob_thread(self):
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.socket.connect(('192.168.0.20', self.oob_port))
+        self.socket.connect((larry_ip, self.oob_port))
         state = 0
         image = ''
         while True:
@@ -224,7 +316,6 @@ class TelnetFrame(wx.Frame):
                  pass
                  
            if state == 2:
-              print "image done"
               if image.endswith("+++done\r\n"):
                  # I'm loading into a PIL image first (ref: https://wiki.wxpython.org/WorkingWithImages)
                  # so that I can turn it upside down.
@@ -234,11 +325,22 @@ class TelnetFrame(wx.Frame):
                     self.refresh_bitmap = True
                  except:
                     pass
-                 print "!"
                  image = ''
                  state = 0
               else:
                  state = 1
+                 
+    def controller_thread_handler(self):
+        """Thread to watch the controller, if one is connected, and do the Right Thing"""
+        self.controller_stop = False
+        self.cmodel = ControllerModel()
+        for event in ps3.read_loop():
+            if event.code == 297:
+               self.cmodel.forward(event.value)
+            if event.code == 49:
+               self.cmodel.fspeed(event.value)
+
+            if self.controller_stop: break
             
     def OnEnter(self, e):
         """The user has entered a command.  Send it!"""
@@ -251,13 +353,14 @@ class TelnetFrame(wx.Frame):
     def OnCloseWindow(self, event):
         """We're closing, so clean up."""
         self.timer.Stop()
+        self.controller_stop = 1
         self.Destroy()
 
 #---------------------------------------------------------------------------
 
-if __name__ == '__main__':
-    import sys
-    app = wx.App()
-    frame = TelnetFrame(None, -1)
-    frame.Show(True)
-    app.MainLoop()
+#if __name__ == '__main__':
+import sys
+app = wx.App()
+frame = TelnetFrame(None, -1)
+frame.Show(True)
+app.MainLoop()
