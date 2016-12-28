@@ -92,6 +92,8 @@ my $pic = '';
 
 my $video_frequency = 0;
 
+my $mvm = {}; # Movement parameter model = controller model
+
 
 
 sub shut_down {
@@ -318,8 +320,13 @@ sub oob_server_error {
     $kernel->yield('_stop');
 }
 sub oob_client_input {
-    # Right now I have no use for client input on the OOB channel, which is just for sending
-    # hardware state and images.
+   # The client sends movement parameters on the OOB channel.
+   my ($heap, $data) = @_[HEAP, ARG0];
+   if ($data =~ /^(.*)=(.*)$/) {
+      set_mvm_parm($1, $2);
+   } else {
+      say (110, $data . "?");
+   }
 }
 sub oob_client_error {
      # Handle client error, including disconnect.
@@ -421,4 +428,16 @@ sub command_quit {
     shut_down();
 }
 
+# ------------------------------------------------------------------------------
+# Movement parameter model
+# ------------------------------------------------------------------------------
+sub set_mvm_parm {
+   my ($key, $val) = @_;
+   $mvm->{$key} = $val;
+   if ($key eq 'BS' or $key eq 'FS' or $key eq 'PS') {
+      $wheels->put("$key=$val");
+   } else {
+      say (115, "$key -> $val");
+   }
+}
 
