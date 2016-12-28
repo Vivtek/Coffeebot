@@ -193,28 +193,68 @@ class ControllerModel():
       self.vfspeed = 0;
       self.vbspeed = 0;
       
+      self.socket = False
+      self.vars = {}
+      
+   def set_socket(self, socket):
+      self.socket = socket
+      
+   def setvar(self, key, value):
+      if not key in self.vars or self.vars[key] != value:
+         self.vars[key] = value
+         if self.socket:
+            self.socket.send ("{}={}\n".format(key, value))
+
+   def stop(self):
+       self.vbackward = 0
+       self.vforward = 0
+       self.vfspeed = 0
+       self.vbspeed = 0
+       self.setvar('FS', 0)
+       self.setvar('BS', 0)
+       #print "stop"
+
    def forward(self, evalue):
       if evalue == 1:
          if self.vbackward:
-            self.vbackward = 0
-            self.vforward = 0
-            print "stop"
+            self.stop()
          else:
             self.vforward = 1
-            print "go forward"
+            #print "go forward"
       else:
-         if self.vforward:
-            self.vforward = 0
-            self.vspeed = 0
-            print "stop"
+         self.stop()
 
    def fspeed(self, evalue):
-      if self.forward:
+      if self.vforward:
          speed = 1 + evalue / 10
          if speed != self.vfspeed:
             self.vfspeed = speed
-            print "speed = {}".format (speed)
+            self.setvar('FS', speed)
  
+   def backward(self, evalue):
+      if evalue == 1:
+         if self.vforward:
+            self.stop()
+         else:
+            self.vbackward = 1
+            #print "go backward"
+      else:
+         self.stop()
+
+   def bspeed(self, evalue):
+      if self.vbackward:
+         speed = 1 + evalue / 10
+         if speed != self.vbspeed:
+            self.vbspeed = speed
+            self.setvar('BS', speed)
+            
+   def leftright(self, evalue):
+      if evalue < 118 or evalue > 140:
+         pspeed = (evalue - 128) / 10
+         if pspeed < 0: pspeed += 1
+         self.setvar('PS', pspeed)
+      else:
+         self.setvar('PS', 0)
 
 #---------------------------------------------------------------------------
 class TelnetFrame(wx.Frame):
@@ -259,6 +299,8 @@ class TelnetFrame(wx.Frame):
         if ps3:
            self.controller_thread = threading.Thread(target=self.controller_thread_handler)
            self.controller_thread.start()
+        else:
+           self.cmodel = False
 
 
     def OnUpdate(self):
@@ -292,6 +334,8 @@ class TelnetFrame(wx.Frame):
     def oob_thread(self):
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.socket.connect((larry_ip, self.oob_port))
+        if self.cmodel:
+           self.cmodel.set_socket(self.socket)
         state = 0
         image = ''
         while True:
@@ -339,6 +383,13 @@ class TelnetFrame(wx.Frame):
                self.cmodel.forward(event.value)
             if event.code == 49:
                self.cmodel.fspeed(event.value)
+            if event.code == 296:
+               self.cmodel.backward(event.value)
+            if event.code == 48:
+               self.cmodel.bspeed(event.value)
+               
+            if event.code == 0 and event.type == 3:
+               self.cmodel.leftright(event.value)
 
             if self.controller_stop: break
             
