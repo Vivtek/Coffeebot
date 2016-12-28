@@ -16,135 +16,122 @@ void setup() {
 
 // ----- state ------
 int speed = 200;
-int suddenness = 100;
 int trim = 0;
 
-int Vrf = 0;
-int Vlf = 0;
-int Vrb = 0;
-int Vlb = 0;
 int speed_rf = 0;
 int speed_lf = 0;
 int speed_rb = 0;
 int speed_lb = 0;
 
+int BS = 0;
+int FS = 0;
+int PS = 0;
+
 unsigned long current_time = 0;
 
+char linebuf[256];
+int  lineoff = 0;
+
 void loop() {
-  int command;
-  if (Serial.available()) {
-     command = Serial.read();
-     switch (command) {
-       case 'A':
-         Vlf = 10;
-         break;
-       case 'B':
-         Vrf = 10;
-         break;
-       case 'C':
-         Vlb = 10;
-         break;
-       case 'D':
-         Vrb = 10;
-         break;
-       case 'f':
-         do_forward();
-         break;
-       case 'b':
-         do_reverse();
-         break;
-       case 'r':
-         do_right_turn();
-         break;
-       case 'l':
-         do_left_turn();
-         break;
-       case 'p':
-         do_pivot_left();
-         break;
-       case 'x':
-         do_stop();
-         break;
-     }
-  }
-
-  if (millis() - current_time > suddenness) {
-     current_time = millis();
-     
-     adjust_speed ("rf", Mrf, speed, Vrf, &speed_rf);
-     adjust_speed ("lf", Mlf, speed, Vlf, &speed_lf);
-     adjust_speed ("rb", Mrb, speed, Vrb, &speed_rb);
-     adjust_speed ("lb", Mlb, speed, Vlb, &speed_lb);
-  }
+   if (Serial.available() ) {
+      int char_in = Serial.read();
+      switch (char_in) {
+        case '\n': break; // ignore linefeed
+        case '\r':
+           linebuf[lineoff++] = '\0';
+           lineoff = 0;
+           handle_line();
+           break;
+        default:
+           linebuf[lineoff++] = char_in;
+           if (lineoff > 254) {  // Line too long - discard.
+              lineoff = 0;
+           }
+        }
+    }
 }
 
-void adjust_speed (char * m, Adafruit_DCMotor *M, int speed, int V, int *speed_m) {
-  int delta = speed * V - *speed_m * 10;
-  
-  if (!delta) {
-    return;
-  }
-  delta = delta / 40 + 1;
-  *speed_m = *speed_m + delta;
-  if (*speed_m < 10 && -*speed_m < 10) {
-     *speed_m = 0;
-  }
-  if (!strcmp (m, "lf")) {
-     Serial.print(m);
-     Serial.print(" ");
-     Serial.println(*speed_m);
-  }
-  if (*speed_m > 0) {
-     M->setSpeed(*speed_m);
+void handle_line() {
+   if (linebuf[2] == '=') {
+      linebuf[2] = '\0';
+      if (!strcmp(linebuf, "BS")) {
+         BS = atoi (linebuf + 3);
+      } else if (!strcmp (linebuf, "FS")) {
+         FS = atoi (linebuf + 3);
+      } else if (!strcmp (linebuf, "PS")) {
+         PS = atoi (linebuf + 3);
+      } else {
+         Serial.print   ("? var ");
+         Serial.println (linebuf);
+         lineoff = 0;
+         return;
+      }
+      update_motors();
+   } else {
+      Serial.print   ("? cmd ");
+      Serial.println (linebuf);
+   }
+}
+
+void update_motors() {
+   if (FS) {
+      int speed = FS * 10;
+      if (speed > 255) { speed = 255; }
+      int lspeed = speed;
+      int rspeed = speed;
+      if (PS < 0) {
+         lspeed = - lspeed * PS / 12;
+      } else if (PS > 0) {
+         rspeed =   rspeed * PS / 12;
+      }
+      set_motor ("lf", Mlf, &speed_lf, lspeed);
+      set_motor ("rf", Mrf, &speed_rf, rspeed);
+      set_motor ("lb", Mlb, &speed_lb, lspeed);
+      set_motor ("rb", Mrb, &speed_rb, rspeed);
+   } else if (BS) {
+      int speed = BS * 10;
+      if (speed > 255) { speed = 255; }
+      int lspeed = speed;
+      int rspeed = speed;
+      if (PS < 0) {
+         lspeed = - lspeed * PS / 12;
+      } else if (PS > 0) {
+         rspeed =   rspeed * PS / 12;
+      }
+      set_motor ("lf", Mlf, &speed_lf, -lspeed);
+      set_motor ("rf", Mrf, &speed_rf, -rspeed);
+      set_motor ("lb", Mlb, &speed_lb, -lspeed);
+      set_motor ("rb", Mrb, &speed_rb, -rspeed);
+   } else if (PS) {
+      int speed = 255 * PS / 12;
+      set_motor ("lf", Mlf, &speed_lf, -speed);
+      set_motor ("rf", Mrf, &speed_rf,  speed);
+      set_motor ("lb", Mlb, &speed_lb, -speed);
+      set_motor ("rb", Mrb, &speed_rb,  speed);
+   } else {
+     set_motor ("lf", Mlf, &speed_lf, 0);
+     set_motor ("rf", Mrf, &speed_rf, 0);
+     set_motor ("lb", Mlb, &speed_lb, 0);
+     set_motor ("rb", Mrb, &speed_rb, 0);
+   }
+}
+
+void set_motor(char * m, Adafruit_DCMotor *M, int * speed_m, int speed) {
+   if (speed != *speed_m) {
+      Serial.print(m);
+      Serial.print(" ");
+      Serial.println(speed);
+   }
+   *speed_m = speed;
+   M->setSpeed(speed);
+   if (speed > 0) {
+     M->setSpeed(speed);
      M->run(FORWARD);
-  } else if (*speed_m < 0) {
-     M->setSpeed(-*speed_m);
+   } else if (speed < 0) {
+     M->setSpeed(-speed);
      M->run(BACKWARD);
-  } else {
+   } else {
      M->run(RELEASE);
-  }
+   }
 }
-
-void do_forward() {
-  Vlf = 10;
-  Vrf = 10;
-  Vlb = 10;
-  Vrb = 10;
-}
-
-void do_reverse() {
-  Vlf = -10;
-  Vrf = -10;
-  Vlb = -10;
-  Vrb = -10;
-}
-
-void do_right_turn() {
-  Vlf = 0;
-  Vrf = 10;
-  Vlb = 0;
-  Vrb = 10;
-}
-
-void do_left_turn() {
-  Vlf = 10;
-  Vrf = 0;
-  Vlb = 10;
-  Vrb = 0;
-}
-
-void do_pivot_left() {
-  Vlf = -10;
-  Vrf = 10;
-  Vlb = -10;
-  Vrb = 10;
-}
-
-void do_stop() {
-  Vlf = 0;
-  Vrf = 0;
-  Vlb = 0;
-  Vrb = 0;
-}
-
 
